@@ -1,8 +1,8 @@
-# My discord bots
+# Fred
 
-A collection of my discord created for learning, automation and experimentation.
+A discord bot that fetches Epic Games free Games
 
-## Notes
-- Projects labeled **v1** are initial versions.
-- Each folder represents a separate project.
-
+## How to use?
+- add to server via this link: https://discord.com/oauth2/authorize?client_id=1461741762547810437
+- setup the free-games channel with fred or manually
+- the command list can be viewed by typing /commands
