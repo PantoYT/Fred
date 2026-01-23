@@ -1,6 +1,6 @@
 # Fred
 
-Fred is a Discord bot that automatically fetches and posts Epic Games free game offers.
+Free Recurrent Epicgames Dump or Fred is a Discord bot that automatically fetches and posts Epic Games free game offers.
 
 ## How to use
 
