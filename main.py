@@ -33,80 +33,6 @@ intents.message_content = True
 bot = commands.Bot(command_prefix="/", intents=intents)
 
 pending_confirmations = {}
-pending_channel_creation = {}
-
-# -------------------------------
-# Sync slash commands
-# -------------------------------
-@bot.event
-async def on_ready():
-    global last_daily_run
-    now = datetime.now(CET)
-    print(f"Bot logged in as {bot.user} at {now.strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"Connected to {len(bot.guilds)} guilds")
-    
-    detected_channels = []
-    guilds_without_channel = []
-    
-    for guild in bot.guilds:
-        channel_found = False
-        for channel in guild.text_channels:
-            if channel.name == CHANNEL_NAME:
-                detected_channels.append(channel.id)
-                channel_found = True
-                print(f"Found channel '{CHANNEL_NAME}' in {guild.name} (ID: {channel.id})")
-                break
-        
-        if not channel_found:
-            guilds_without_channel.append(guild)
-            print(f"WARNING: No '{CHANNEL_NAME}' channel in {guild.name}")
-    
-    if detected_channels:
-        print(f"Total channels detected: {len(detected_channels)}")
-    
-    for guild in guilds_without_channel:
-        try:
-            target_channel = guild.system_channel or guild.text_channels[0] if guild.text_channels else None
-            
-            if target_channel:
-                embed = discord.Embed(
-                    title="Fred Setup Required",
-                    description=f"Fred needs a channel named `{CHANNEL_NAME}` to post Epic Games updates.",
-                    color=0xFF6B6B
-                )
-                embed.add_field(
-                    name="Option 1: Auto-create",
-                    value=f"Use `/confirmchannel` and Fred will create the channel for you.",
-                    inline=False
-                )
-                embed.add_field(
-                    name="Option 2: Manual",
-                    value=f"Create a channel named `{CHANNEL_NAME}` yourself.",
-                    inline=False
-                )
-                await target_channel.send(embed=embed)
-        except Exception as e:
-            print(f"Could not send setup message to {guild.name}: {e}")
-    
-    try:
-        synced = await bot.tree.sync()
-        print(f"Synced {len(synced)} slash commands")
-    except Exception as e:
-        print(f"Failed to sync commands: {e}")
-    
-    await bot.change_presence(activity=discord.Activity(
-        type=discord.ActivityType.watching,
-        name="Watching free games | /commands"
-    ))
-    
-    today_str = str(now.date())
-    target_time = datetime.now(CET).replace(hour=17, minute=1, second=0, microsecond=0).time()
-
-    if last_daily_run != today_str and now.time() >= target_time:
-        print("Running late start check...")
-        await run_check()
-    
-    daily_check.start()
 
 # -------------------------------
 # Load or initialize posted games
@@ -131,7 +57,7 @@ def save_posted():
         }, f, ensure_ascii=False, indent=2)
 
 # -------------------------------
-# Helper: get all free-games channels
+# Helper functions
 # -------------------------------
 def get_free_game_channels():
     """Find all channels named 'free-games' across all guilds"""
@@ -141,6 +67,7 @@ def get_free_game_channels():
             if channel.name == CHANNEL_NAME:
                 channels.append(channel)
     return channels
+
 async def fetch_games():
     try:
         timeout = aiohttp.ClientTimeout(total=10)
@@ -154,9 +81,6 @@ async def fetch_games():
         print(f"Error fetching games: {e}")
         return None
 
-# -------------------------------
-# Helper: create embeds for games
-# -------------------------------
 def make_embeds(games, ctx_mention=None, upcoming=False, wide_image=False):
     embeds = []
     for g in games:
@@ -220,17 +144,11 @@ def make_embeds(games, ctx_mention=None, upcoming=False, wide_image=False):
         embeds.append(embed)
     return embeds
 
-# -------------------------------
-# Helper: check if games are same
-# -------------------------------
 def are_games_same(new_games, old_games):
     new_titles = {g.get("title") for g in new_games}
     old_titles = {g.get("title") for g in old_games}
     return new_titles == old_titles
 
-# -------------------------------
-# Core: run the check
-# -------------------------------
 async def run_check(ctx_mention=None, force=False, interaction_channel=None):
     global last_daily_run, posted_games, posted_upcoming
     
@@ -288,60 +206,96 @@ async def run_check(ctx_mention=None, force=False, interaction_channel=None):
     return True
 
 # -------------------------------
+# Events
+# -------------------------------
+@bot.event
+async def on_ready():
+    global last_daily_run
+    now = datetime.now(CET)
+    print(f"Bot logged in as {bot.user}")
+    print(f"Connected to {len(bot.guilds)} guilds")
+    
+    detected_channels = []
+    guilds_without_channel = []
+    
+    for guild in bot.guilds:
+        channel_found = False
+        for channel in guild.text_channels:
+            if channel.name == CHANNEL_NAME:
+                detected_channels.append(channel.id)
+                channel_found = True
+                print(f"Found channel '{CHANNEL_NAME}' in {guild.name} (ID: {channel.id})")
+                break
+        
+        if not channel_found:
+            guilds_without_channel.append(guild)
+            print(f"WARNING: No '{CHANNEL_NAME}' channel in {guild.name}")
+    
+    if detected_channels:
+        print(f"Total channels detected: {len(detected_channels)}")
+    
+    for guild in guilds_without_channel:
+        try:
+            target_channel = guild.system_channel or guild.text_channels[0] if guild.text_channels else None
+            
+            if target_channel:
+                embed = discord.Embed(
+                    title="Fred Setup Required",
+                    description=f"Fred needs a channel named `{CHANNEL_NAME}` to post Epic Games updates.",
+                    color=0xFF6B6B
+                )
+                embed.add_field(
+                    name="Option 1: Auto-create",
+                    value=f"Use `/setup` and Fred will create the channel for you.",
+                    inline=False
+                )
+                embed.add_field(
+                    name="Option 2: Manual",
+                    value=f"Create a channel named `{CHANNEL_NAME}` yourself.",
+                    inline=False
+                )
+                await target_channel.send(embed=embed)
+        except Exception as e:
+            print(f"Could not send setup message to {guild.name}: {e}")
+    
+    try:
+        synced = await bot.tree.sync()
+        print(f"Synced {len(synced)} slash commands")
+    except Exception as e:
+        print(f"Failed to sync commands: {e}")
+    
+    await bot.change_presence(activity=discord.Activity(
+        type=discord.ActivityType.watching,
+        name="for free games | /commands"
+    ))
+    
+    today_str = str(now.date())
+    target_time = datetime.now(CET).replace(hour=17, minute=1, second=0, microsecond=0).time()
+
+    if last_daily_run != today_str and now.time() >= target_time:
+        print("Running late start check...")
+        await run_check()
+    
+    daily_check.start()
+
+# -------------------------------
 # Commands
 # -------------------------------
 @bot.tree.command(name="commands", description="Show all available commands")
 async def commands_slash(interaction: discord.Interaction):
-    embed = discord.Embed(
-        title="Fred - Epic Games Tracker",
-        description="Track free Epic Games Store games automatically",
-        color=0x1E3A8A
-    )
-    embed.add_field(
-        name="/showcurrent",
-        value="Display current free games",
-        inline=False
-    )
-    embed.add_field(
-        name="/showupcoming",
-        value="Display upcoming free games",
-        inline=False
-    )
-    embed.add_field(
-        name="/nextcheck",
-        value="Show time until next automatic check",
-        inline=False
-    )
-    embed.add_field(
-        name="/confirm",
-        value="Show games again if they haven't changed",
-        inline=False
-    )
-    embed.add_field(
-        name="/confirmchannel",
-        value="Create a free-games channel (requires Manage Channels permission)",
-        inline=False
-    )
-    embed.add_field(
-        name="/commands",
-        value="Show this help menu",
-        inline=False
-    )
-    embed.add_field(
-        name="/getgame",
-        value="Manually check for new free games (owner only)",
-        inline=False
-    )
-    embed.add_field(
-        name="/shutdown",
-        value="Shut down the bot (owner only)",
-        inline=False
-    )
-    embed.set_footer(text="Daily automatic check at 17:01 CET")
+    embed = discord.Embed(title="Fred - Epic Games Tracker", description="Track free Epic Games automatically.", color=0x1E3A8A)
+    embed.add_field(name="/current", value="Show current free games", inline=False)
+    embed.add_field(name="/upcoming", value="Show upcoming free games", inline=False)
+    embed.add_field(name="/next", value="Time until next check", inline=False)
+    embed.add_field(name="/confirm", value="Show games again", inline=False)
+    embed.add_field(name="/setup", value="Create free-games channel", inline=False)
+    embed.add_field(name="/check", value="Manual check (owner only)", inline=False)
+    embed.add_field(name="/shutdown", value="Shut down bot (owner only)", inline=False)
+    embed.set_footer(text="Daily check at 17:01 CET")
     await interaction.response.send_message(embed=embed)
 
-@bot.tree.command(name="showcurrent", description="Display current free games")
-async def showcurrent_slash(interaction: discord.Interaction):
+@bot.tree.command(name="current", description="Show current free games")
+async def current_slash(interaction: discord.Interaction):
     await interaction.response.defer()
     embeds = make_embeds(posted_games, ctx_mention=interaction.user.mention, upcoming=False, wide_image=True)
     if embeds:
@@ -351,8 +305,8 @@ async def showcurrent_slash(interaction: discord.Interaction):
     else:
         await interaction.followup.send("No current games to display.")
 
-@bot.tree.command(name="showupcoming", description="Display upcoming free games")
-async def showupcoming_slash(interaction: discord.Interaction):
+@bot.tree.command(name="upcoming", description="Show upcoming free games")
+async def upcoming_slash(interaction: discord.Interaction):
     await interaction.response.defer()
     embeds = make_embeds(posted_upcoming, ctx_mention=interaction.user.mention, upcoming=True, wide_image=True)
     if embeds:
@@ -362,8 +316,8 @@ async def showupcoming_slash(interaction: discord.Interaction):
     else:
         await interaction.followup.send("No upcoming games to display.")
 
-@bot.tree.command(name="nextcheck", description="Show time until next automatic check")
-async def nextcheck_slash(interaction: discord.Interaction):
+@bot.tree.command(name="next", description="Time until next automatic check")
+async def next_slash(interaction: discord.Interaction):
     now = datetime.now(CET)
     target = now.replace(hour=17, minute=1, second=0, microsecond=0)
     
@@ -376,34 +330,26 @@ async def nextcheck_slash(interaction: discord.Interaction):
     
     embed = discord.Embed(
         title="Next Automatic Check",
-        description=f"The next automatic check will run at **{target.strftime('%H:%M')} CET**",
+        description=f"Next check: **{target.strftime('%H:%M')} CET**",
         color=0x1E3A8A
     )
-    embed.add_field(
-        name="Time Remaining",
-        value=f"{hours} hours and {minutes} minutes",
-        inline=False
-    )
-    embed.add_field(
-        name="Date",
-        value=target.strftime('%Y-%m-%d'),
-        inline=False
-    )
+    embed.add_field(name="Time Remaining", value=f"{hours}h {minutes}m", inline=True)
+    embed.add_field(name="Date", value=target.strftime('%Y-%m-%d'), inline=True)
     
     await interaction.response.send_message(embed=embed)
 
-@bot.tree.command(name="getgame", description="Manually check for new free games (owner only)")
-async def getgame_slash(interaction: discord.Interaction):
+@bot.tree.command(name="check", description="Manual check for new games (owner only)")
+async def check_slash(interaction: discord.Interaction):
     if interaction.user.id != OWNER_ID:
-        await interaction.response.send_message("This command is owner-only.", ephemeral=True)
+        await interaction.response.send_message("Owner-only command.", ephemeral=True)
         return
     
-    await interaction.response.send_message(f"Manual check triggered by {interaction.user.mention}")
+    await interaction.response.send_message(f"Manual check by {interaction.user.mention}")
     result = await run_check(ctx_mention=interaction.user.mention, force=False, interaction_channel=interaction.channel)
     if not result:
         await interaction.followup.send("Failed to fetch games.")
 
-@bot.tree.command(name="confirm", description="Confirm to see games again if they're the same")
+@bot.tree.command(name="confirm", description="Show games again if unchanged")
 async def confirm_slash(interaction: discord.Interaction):
     await interaction.response.defer()
     now = datetime.now(CET)
@@ -420,25 +366,25 @@ async def confirm_slash(interaction: discord.Interaction):
     else:
         await interaction.followup.send("No pending confirmation or it expired.")
 
-@bot.tree.command(name="confirmchannel", description="Create a free-games channel for Fred")
-async def confirmchannel_slash(interaction: discord.Interaction):
+@bot.tree.command(name="setup", description="Create free-games channel")
+async def setup_slash(interaction: discord.Interaction):
     guild = interaction.guild
     
     if not guild:
-        await interaction.response.send_message("This command must be used in a server.", ephemeral=True)
+        await interaction.response.send_message("Must be used in a server.", ephemeral=True)
         return
     
     for channel in guild.text_channels:
         if channel.name == CHANNEL_NAME:
-            await interaction.response.send_message(f"A channel named `{CHANNEL_NAME}` already exists in this server.", ephemeral=True)
+            await interaction.response.send_message(f"Channel `{CHANNEL_NAME}` already exists.", ephemeral=True)
             return
     
     if not guild.me.guild_permissions.manage_channels:
-        await interaction.response.send_message("Fred doesn't have permission to create channels. Please give Fred the 'Manage Channels' permission or create the channel manually.", ephemeral=True)
+        await interaction.response.send_message("Fred needs 'Manage Channels' permission.", ephemeral=True)
         return
     
     if not interaction.user.guild_permissions.manage_channels:
-        await interaction.response.send_message("You need 'Manage Channels' permission to use this command.", ephemeral=True)
+        await interaction.response.send_message("You need 'Manage Channels' permission.", ephemeral=True)
         return
     
     try:
@@ -448,31 +394,23 @@ async def confirmchannel_slash(interaction: discord.Interaction):
         )
         
         embed = discord.Embed(
-            title="Channel Created Successfully",
-            description=f"Fred will now post Epic Games updates in {new_channel.mention}",
+            title="Channel Created",
+            description=f"Fred will post updates in {new_channel.mention}",
             color=0x4CAF50
         )
-        embed.add_field(
-            name="Daily Updates",
-            value="Fred will automatically check for new games at 17:01 CET every day.",
-            inline=False
-        )
-        embed.add_field(
-            name="Commands",
-            value="Use `/commands` to see all available commands.",
-            inline=False
-        )
+        embed.add_field(name="Daily Updates", value="Automatic check at 17:01 CET", inline=False)
+        embed.add_field(name="Commands", value="Use `/commands` to see all commands", inline=False)
         
         await interaction.response.send_message(embed=embed)
         
         welcome_embed = discord.Embed(
-            title="Welcome to Free Games Updates",
-            description="Fred will post Epic Games Store free game updates here daily at 17:01 CET.",
+            title="Welcome to Free Games",
+            description="Daily Epic Games Store updates at 17:01 CET",
             color=0x1E3A8A
         )
         welcome_embed.add_field(
-            name="Commands",
-            value="Use `/showcurrent` to see current free games\nUse `/showupcoming` to see upcoming games\nUse `/commands` for all commands",
+            name="Quick Commands",
+            value="`/current` - Current games\n`/upcoming` - Upcoming games\n`/commands` - All commands",
             inline=False
         )
         await new_channel.send(embed=welcome_embed)
@@ -483,7 +421,7 @@ async def confirmchannel_slash(interaction: discord.Interaction):
         await interaction.response.send_message(f"Failed to create channel: {e}", ephemeral=True)
         print(f"Error creating channel in {guild.name}: {e}")
 
-@bot.tree.command(name="shutdown", description="Shutdown the bot (owner only)")
+@bot.tree.command(name="shutdown", description="Shut down bot (owner only)")
 async def shutdown_slash(interaction: discord.Interaction):
     if interaction.user.id != OWNER_ID:
         await interaction.response.send_message("You don't have permission.", ephemeral=True)
