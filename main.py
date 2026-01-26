@@ -266,7 +266,7 @@ async def on_ready():
     
     await bot.change_presence(activity=discord.Activity(
         type=discord.ActivityType.watching,
-        name="for free games | /commands"
+        name="Watching for free games | /commands"
     ))
     
     today_str = str(now.date())
