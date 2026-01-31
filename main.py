@@ -24,6 +24,32 @@ HEADERS = {
 POSTED_FILE = "posted_games.json"
 CHANNEL_NAME = "free-games"
 CET = pytz.timezone('Europe/Warsaw')
+API_CALL_LOG = "api_calls.json"
+
+# API call tracking
+def get_api_call_count():
+    """Get current API call count for this month"""
+    try:
+        with open(API_CALL_LOG, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            return data.get("count", 0), data.get("month", "")
+    except (FileNotFoundError, json.JSONDecodeError):
+        return 0, ""
+
+def increment_api_calls():
+    """Increment API call count, reset if new month"""
+    now = datetime.now(CET)
+    current_month = now.strftime("%Y-%m")
+    count, last_month = get_api_call_count()
+    
+    if last_month != current_month:
+        count = 0
+    
+    count += 1
+    with open(API_CALL_LOG, "w", encoding="utf-8") as f:
+        json.dump({"count": count, "month": current_month}, f)
+    
+    return count
 
 # -------------------------------
 # Discord bot setup
@@ -49,10 +75,15 @@ except (FileNotFoundError, json.JSONDecodeError):
     last_daily_run = None
 
 def save_posted():
+    """Save posted games and ensure no duplicates between current and upcoming"""
+    # Clean: remove any upcoming games that are also current
+    current_titles = {g.get("title") for g in posted_games}
+    clean_upcoming = [g for g in posted_upcoming if g.get("title") not in current_titles]
+    
     with open(POSTED_FILE, "w", encoding="utf-8") as f:
         json.dump({
             "current": posted_games,
-            "upcoming": posted_upcoming,
+            "upcoming": clean_upcoming,
             "last_daily_run": last_daily_run
         }, f, ensure_ascii=False, indent=2)
 
@@ -70,6 +101,11 @@ def get_free_game_channels():
 
 async def fetch_games():
     try:
+        call_count = increment_api_calls()
+        print(f"API call #{call_count}/60")
+        if call_count > 58:
+            print("WARNING: Approaching API limit!")
+        
         timeout = aiohttp.ClientTimeout(total=10)
         async with aiohttp.ClientSession(headers=HEADERS, timeout=timeout) as session:
             async with session.get(EPIC_API_URL) as resp:
@@ -168,6 +204,8 @@ async def run_check(ctx_mention=None, force=False, interaction_channel=None):
 
     current_games = data.get("currentGames", [])
     next_games = data.get("nextGames", [])
+    
+    current_titles = {g.get("title") for g in current_games}
 
     if are_games_same(current_games, posted_games) and not force:
         if ctx_mention and interaction_channel:
@@ -176,10 +214,15 @@ async def run_check(ctx_mention=None, force=False, interaction_channel=None):
         return True
 
     posted_games = current_games.copy()
+    
+    # Remove games that are now current from the upcoming list
+    posted_upcoming = [g for g in posted_upcoming if g.get("title") not in current_titles]
 
-    new_upcoming = [g for g in next_games if g.get("title") not in [u.get("title") for u in posted_upcoming]]
+    # Add only new upcoming games that aren't already listed or currently free
+    new_upcoming = [g for g in next_games if g.get("title") not in current_titles and g.get("title") not in [u.get("title") for u in posted_upcoming]]
     posted_upcoming.extend(new_upcoming)
 
+    # Mark API call as done for today (before posting)
     now = datetime.now(CET)
     last_daily_run = str(now.date())
     save_posted()
@@ -272,9 +315,7 @@ async def on_ready():
     today_str = str(now.date())
     target_time = datetime.now(CET).replace(hour=17, minute=1, second=0, microsecond=0).time()
 
-    if last_daily_run != today_str and now.time() >= target_time:
-        print("Running late start check...")
-        await run_check()
+    # Don't run check here - let the daily task handle it
     
     daily_check.start()
 
@@ -432,27 +473,28 @@ async def shutdown_slash(interaction: discord.Interaction):
 # -------------------------------
 # Daily scheduled task at 17:01 CET
 # -------------------------------
-@tasks.loop(hours=24)
+@tasks.loop(minutes=15)
 async def daily_check():
+    """Check every 15 minutes. Run only if time >= 17:01 and check hasn't run today."""
     global last_daily_run
     now = datetime.now(CET)
     today_str = str(now.date())
-    if last_daily_run != today_str:
+    
+    # Check if it's 17:01 or later and check hasn't run today
+    target_time = now.replace(hour=17, minute=1, second=0, microsecond=0)
+    if now >= target_time and last_daily_run != today_str:
         print(f"Running daily check at {now.strftime('%Y-%m-%d %H:%M:%S')}")
-        await run_check()
-        next_run = now + timedelta(hours=24)
-        print(f"Next daily check scheduled for {next_run.strftime('%Y-%m-%d %H:%M:%S')}")
+        result = await run_check()
+        if result:
+            next_run = now + timedelta(days=1)
+            print(f"Next daily check scheduled for {next_run.strftime('%Y-%m-%d at 17:01:00 CET')}")
+        else:
+            print("Daily check failed, will retry")
 
 @daily_check.before_loop
 async def before_daily_check():
     await bot.wait_until_ready()
-    now = datetime.now(CET)
-    target = now.replace(hour=17, minute=1, second=0, microsecond=0)
-    if now >= target:
-        target += timedelta(days=1)
-    sleep_seconds = (target - now).total_seconds()
-    print(f"Daily check will start in {sleep_seconds/3600:.2f} hours at {target.strftime('%H:%M:%S')}")
-    await asyncio.sleep(sleep_seconds)
+    print("Daily check task started - will run after 17:01 CET every day")
 
 # -------------------------------
 # Run the bot
