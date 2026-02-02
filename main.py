@@ -185,7 +185,7 @@ def are_games_same(new_games, old_games):
     old_titles = {g.get("title") for g in old_games}
     return new_titles == old_titles
 
-async def run_check(ctx_mention=None, force=False, interaction_channel=None):
+async def run_check(ctx_mention=None, force=False, interaction_channel=None, is_auto_check=False):
     global last_daily_run, posted_games, posted_upcoming
     
     data = await fetch_games()
@@ -211,6 +211,11 @@ async def run_check(ctx_mention=None, force=False, interaction_channel=None):
         if ctx_mention and interaction_channel:
             pending_confirmations[ctx_mention] = datetime.now(CET) + timedelta(minutes=1)
             await interaction_channel.send(f"{ctx_mention}, games are the same as last check. Use /confirm within 1 min to see them again.")
+        # For auto checks, still mark as run even if games are the same
+        if is_auto_check:
+            now = datetime.now(CET)
+            last_daily_run = str(now.date())
+            save_posted()
         return True
 
     posted_games = current_games.copy()
@@ -222,9 +227,11 @@ async def run_check(ctx_mention=None, force=False, interaction_channel=None):
     new_upcoming = [g for g in next_games if g.get("title") not in current_titles and g.get("title") not in [u.get("title") for u in posted_upcoming]]
     posted_upcoming.extend(new_upcoming)
 
-    # Mark API call as done for today (before posting)
-    now = datetime.now(CET)
-    last_daily_run = str(now.date())
+    # Mark API call as done for today ONLY if this is an automatic check
+    if is_auto_check:
+        now = datetime.now(CET)
+        last_daily_run = str(now.date())
+    
     save_posted()
 
     embeds_current = make_embeds(current_games, ctx_mention=ctx_mention, upcoming=False, wide_image=True)
@@ -313,9 +320,22 @@ async def on_ready():
     ))
     
     today_str = str(now.date())
-    target_time = datetime.now(CET).replace(hour=17, minute=1, second=0, microsecond=0).time()
+    target_time = datetime.now(CET).replace(hour=17, minute=1, second=0, microsecond=0)
+    
+    print(f"Current time: {now.strftime('%Y-%m-%d %H:%M:%S CET')}")
+    print(f"Last daily run: {last_daily_run}")
+    print(f"Today's date: {today_str}")
 
-    # Don't run check here - let the daily task handle it
+    # If bot starts after 17:01 and hasn't run today, run the check immediately
+    if now >= target_time and last_daily_run != today_str:
+        print(f"Bot started after 17:01 and check hasn't run today - running now")
+        result = await run_check(is_auto_check=True)
+        if result:
+            print(f"Startup check completed successfully")
+        else:
+            print("Startup check failed")
+    else:
+        print(f"No startup check needed (last run: {last_daily_run}, current: {today_str})")
     
     daily_check.start()
 
@@ -386,7 +406,7 @@ async def check_slash(interaction: discord.Interaction):
         return
     
     await interaction.response.send_message(f"Manual check by {interaction.user.mention}")
-    result = await run_check(ctx_mention=interaction.user.mention, force=False, interaction_channel=interaction.channel)
+    result = await run_check(ctx_mention=interaction.user.mention, force=False, interaction_channel=interaction.channel, is_auto_check=False)
     if not result:
         await interaction.followup.send("Failed to fetch games.")
 
@@ -484,12 +504,12 @@ async def daily_check():
     target_time = now.replace(hour=17, minute=1, second=0, microsecond=0)
     if now >= target_time and last_daily_run != today_str:
         print(f"Running daily check at {now.strftime('%Y-%m-%d %H:%M:%S')}")
-        result = await run_check()
+        result = await run_check(is_auto_check=True)
         if result:
             next_run = now + timedelta(days=1)
             print(f"Next daily check scheduled for {next_run.strftime('%Y-%m-%d at 17:01:00 CET')}")
         else:
-            print("Daily check failed, will retry")
+            print("Daily check failed, will retry in 15 minutes")
 
 @daily_check.before_loop
 async def before_daily_check():
