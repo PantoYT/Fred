@@ -177,8 +177,8 @@ def are_games_same(new_games, old_games):
 # -------------------------------
 async def update_channel_messages(channel, current_games, upcoming_games, ctx_mention=None):
     """
-    Edits existing pinned messages if possible, otherwise sends new ones.
-    Tracks message IDs per channel so the channel always shows exactly one set of games.
+    Edits existing messages if possible, otherwise sends new ones.
+    Deletes extra stale messages when game count decreases.
     """
     global message_ids
 
@@ -188,8 +188,14 @@ async def update_channel_messages(channel, current_games, upcoming_games, ctx_me
     embeds_current = make_embeds(current_games, ctx_mention=ctx_mention, upcoming=False, wide_image=True)
     embeds_upcoming = make_embeds(upcoming_games, ctx_mention=ctx_mention, upcoming=True, wide_image=True)
 
+    async def delete_message(msg_id):
+        try:
+            msg = await channel.fetch_message(msg_id)
+            await msg.delete()
+        except (discord.NotFound, discord.HTTPException):
+            pass
+
     async def edit_or_send(existing_id, content=None, embed=None):
-        """Try to edit existing message; send new one if not found."""
         if existing_id:
             try:
                 msg = await channel.fetch_message(existing_id)
@@ -197,7 +203,6 @@ async def update_channel_messages(channel, current_games, upcoming_games, ctx_me
                 return msg.id
             except (discord.NotFound, discord.HTTPException):
                 pass
-        # Send new
         msg = await channel.send(content=content, embed=embed)
         return msg.id
 
@@ -214,23 +219,28 @@ async def update_channel_messages(channel, current_games, upcoming_games, ctx_me
         existing_id = old_current_ids[i] if i < len(old_current_ids) else None
         msg_id = await edit_or_send(existing_id, embed=embed)
         new_current_ids.append(msg_id)
+    # Delete extra stale embeds if game count shrank
+    for old_id in old_current_ids[len(embeds_current):]:
+        await delete_message(old_id)
     ids["current_embeds"] = new_current_ids
 
     # --- Upcoming games ---
+    old_upcoming_ids = ids.get("upcoming_embeds", [])
     if embeds_upcoming:
         ids["upcoming_header"] = await edit_or_send(
             ids.get("upcoming_header"),
             content="**📅 Upcoming Free Games:**"
         )
-        old_upcoming_ids = ids.get("upcoming_embeds", [])
         new_upcoming_ids = []
         for i, embed in enumerate(embeds_upcoming):
             existing_id = old_upcoming_ids[i] if i < len(old_upcoming_ids) else None
             msg_id = await edit_or_send(existing_id, embed=embed)
             new_upcoming_ids.append(msg_id)
+        # Delete extra stale upcoming embeds
+        for old_id in old_upcoming_ids[len(embeds_upcoming):]:
+            await delete_message(old_id)
         ids["upcoming_embeds"] = new_upcoming_ids
     else:
-        # If no upcoming games, clear old upcoming messages by editing them to placeholder
         upcoming_header_id = ids.get("upcoming_header")
         if upcoming_header_id:
             try:
@@ -238,6 +248,10 @@ async def update_channel_messages(channel, current_games, upcoming_games, ctx_me
                 await msg.edit(content="**📅 Upcoming Free Games:** *(none listed yet)*")
             except (discord.NotFound, discord.HTTPException):
                 pass
+        # Delete old upcoming embeds when none remain
+        for old_id in old_upcoming_ids:
+            await delete_message(old_id)
+        ids["upcoming_embeds"] = []
 
     message_ids[channel_key] = ids
 
@@ -378,6 +392,7 @@ async def commands_slash(interaction: discord.Interaction):
     embed.add_field(name="/confirm", value="Show games again if unchanged", inline=False)
     embed.add_field(name="/setup", value="Create free-games channel", inline=False)
     embed.add_field(name="/check", value="Manual check (owner only)", inline=False)
+    embed.add_field(name="/cleanup", value="Delete old messages and repost fresh (owner only)", inline=False)
     embed.add_field(name="/shutdown", value="Shut down bot (owner only)", inline=False)
     embed.set_footer(text="Daily check at 17:01 CET")
     await interaction.response.send_message(embed=embed)
@@ -476,6 +491,42 @@ async def setup_slash(interaction: discord.Interaction):
         print(f"Created channel '{CHANNEL_NAME}' in {guild.name}")
     except Exception as e:
         await interaction.response.send_message(f"Failed to create channel: {e}", ephemeral=True)
+
+@bot.tree.command(name="cleanup", description="Delete all old bot messages and repost fresh (owner only)")
+async def cleanup_slash(interaction: discord.Interaction):
+    if interaction.user.id != OWNER_ID:
+        await interaction.response.send_message("Owner-only command.", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+    global message_ids
+    channel = interaction.channel
+    channel_key = str(channel.id)
+
+    # Delete all tracked messages for this channel
+    ids = message_ids.get(channel_key, {})
+    all_ids = (
+        ([ids.get("current_header")] if ids.get("current_header") else [])
+        + ids.get("current_embeds", [])
+        + ([ids.get("upcoming_header")] if ids.get("upcoming_header") else [])
+        + ids.get("upcoming_embeds", [])
+    )
+    deleted = 0
+    for msg_id in all_ids:
+        try:
+            msg = await channel.fetch_message(msg_id)
+            await msg.delete()
+            deleted += 1
+        except (discord.NotFound, discord.HTTPException):
+            pass
+
+    # Reset tracked IDs for this channel
+    message_ids[channel_key] = {}
+    save_posted()
+
+    await interaction.followup.send(f"Deleted {deleted} old messages. Running fresh check...", ephemeral=True)
+    result = await run_check(ctx_mention=interaction.user.mention, force=True, interaction_channel=channel, is_auto_check=False)
+    if not result:
+        await interaction.followup.send("Failed to fetch games.", ephemeral=True)
 
 @bot.tree.command(name="shutdown", description="Shut down bot (owner only)")
 async def shutdown_slash(interaction: discord.Interaction):
