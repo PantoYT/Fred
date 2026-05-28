@@ -291,13 +291,8 @@ async def run_check(ctx_mention=None, force=False, interaction_channel=None, is_
         return True
 
     posted_games = current_games.copy()
-    posted_upcoming = [g for g in posted_upcoming if g.get("title") not in current_titles]
-    new_upcoming = [
-        g for g in next_games
-        if g.get("title") not in current_titles
-        and g.get("title") not in {u.get("title") for u in posted_upcoming}
-    ]
-    posted_upcoming.extend(new_upcoming)
+    # Use only what the API currently says is upcoming — don't accumulate historical entries
+    posted_upcoming = [g for g in next_games if g.get("title") not in current_titles]
 
     if is_auto_check:
         last_daily_run = str(datetime.now(CET).date())
@@ -502,22 +497,16 @@ async def cleanup_slash(interaction: discord.Interaction):
     channel = interaction.channel
     channel_key = str(channel.id)
 
-    # Delete all tracked messages for this channel
-    ids = message_ids.get(channel_key, {})
-    all_ids = (
-        ([ids.get("current_header")] if ids.get("current_header") else [])
-        + ids.get("current_embeds", [])
-        + ([ids.get("upcoming_header")] if ids.get("upcoming_header") else [])
-        + ids.get("upcoming_embeds", [])
-    )
+    # Delete ALL bot messages in the channel (not just tracked ones)
     deleted = 0
-    for msg_id in all_ids:
-        try:
-            msg = await channel.fetch_message(msg_id)
-            await msg.delete()
-            deleted += 1
-        except (discord.NotFound, discord.HTTPException):
-            pass
+    async for msg in channel.history(limit=500):
+        if msg.author == bot.user:
+            try:
+                await msg.delete()
+                deleted += 1
+                await asyncio.sleep(0.5)  # avoid rate limits
+            except (discord.NotFound, discord.HTTPException):
+                pass
 
     # Reset tracked IDs for this channel
     message_ids[channel_key] = {}
